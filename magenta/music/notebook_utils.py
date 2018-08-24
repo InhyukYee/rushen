@@ -82,6 +82,7 @@ def play_sequence(sequence,
                   synth=midi_synth.synthesize,
                   sample_rate=_DEFAULT_SAMPLE_RATE,
                   colab_ephemeral=True,
+                  wavpath=None,
                   **synth_args):
   """Creates an interactive player for a synthesized note sequence.
 
@@ -97,7 +98,19 @@ def play_sequence(sequence,
     **synth_args: Additional keyword arguments to pass to the synth function.
   """
   array_of_floats = synth(sequence, sample_rate=sample_rate, **synth_args)
+  
+  normalizer = float(np.iinfo(np.int16).max)
+  array_of_ints = np.array(                                                                      
+      np.asarray(array_of_floats) * normalizer, dtype=np.int16)                                               
+  memfile = BytesIO()                                                                                            
+  wavfile.write(memfile, sample_rate, array_of_ints)
 
+  if wavpath != None:
+    print('wavpath:' + wavpath)                                                                                        
+    with open(wavpath, 'wb') as f:
+      f.write(memfile.getvalue())
+  memfile.close()
+  
   try:
     import google.colab  # pylint: disable=unused-import,unused-variable,g-import-not-at-top
     colab_play(array_of_floats, sample_rate, colab_ephemeral)

@@ -162,6 +162,10 @@ tf.app.flags.DEFINE_string(
     'log', 'WARN',
     'The threshold for what messages will be logged. DEBUG, INFO, WARN, ERROR, '
     'or FATAL.')
+tf.app.flags.DEFINE_string(
+    'checkpoint', 'trio_16bar_hierdec.ckpt',
+    'Used for Trio Model ')
+
 
 _CONTROL_FLAGS = [
     'clock_control_number',

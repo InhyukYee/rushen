@@ -3,7 +3,11 @@
 import abc
 import threading
 import time
-
+import pretty_midi
+import subprocess
+import random
+import os
+import numpy as np
 # internal imports
 import tensorflow as tf
 
@@ -11,6 +15,7 @@ import magenta
 from magenta.protobuf import generator_pb2
 from magenta.protobuf import music_pb2
 
+import magenta.music as mm
 
 class MidiInteractionException(Exception):
   """Base class for exceptions in this module."""
@@ -58,7 +63,7 @@ class MidiInteraction(threading.Thread):
         `sequence_generators` contains multiple SequenceGenerators.
   """
   _metaclass__ = abc.ABCMeta
-
+  count = 0
   # Base QPM when set by a tempo control change.
   _BASE_QPM = 60
 
@@ -91,6 +96,8 @@ class MidiInteraction(threading.Thread):
       return self._sequence_generators[0]
     val = self._midi_hub.control_value(self._generator_select_control_number)
     val = 0 if val is None else val
+    if val >= len(self._sequence_generators):
+      return None
     return self._sequence_generators[val % len(self._sequence_generators)]
 
   @property
@@ -296,7 +303,55 @@ class CallAndResponseMidiInteraction(MidiInteraction):
   def _should_loop(self):
     return (self._loop_control_number and
             self._midi_hub.control_value(self._loop_control_number) == 127)
-
+  
+  def _getPianoTrackFromTrio(self, input_sequence, midFilepath, midRootpath):
+    print('midFilepath:' + midFilepath)
+    print('midRootpath:' + midRootpath)
+    tempPath = midRootpath + 'temp'
+    print('tempPath:' + tempPath)
+    subprocess.call(['python', '/Users/inhyukyee/git/AIM/tools/midi_splitter.py', '-f', midFilepath, '-d', tempPath])
+    #save input_sequence to midi file
+    mm.sequence_proto_to_midi_file(input_sequence, midRootpath + '/temp/input_sequence.mid')
+    front_midi_data = pretty_midi.PrettyMIDI(midRootpath + 'temp/input_sequence.mid')
+    orig_midi_data = pretty_midi.PrettyMIDI(midRootpath + 'temp/_0.mid')
+    merged_midi_data = pretty_midi.PrettyMIDI(midRootpath + 'temp/_0.mid')
+    del merged_midi_data.instruments[0].notes[:]
+    
+    #front_midi_data_start_time = None
+    front_midi_data_end_time = None
+    for note in front_midi_data.instruments[0].notes:
+      #print(note)
+      #if front_midi_data_start_time == None:
+        #front_midi_data_start_time = note.start
+      #note.start = note.start - front_midi_data_start_time
+      #note.end = note.end -front_midi_data_start_time
+      front_midi_data_end_time = note.end
+      merged_midi_data.instruments[0].notes.append(note)
+    ##print('\n\n')
+    #merge front & orig
+    for note in orig_midi_data.instruments[0].notes:
+      #print(note)
+      if note.start >= front_midi_data_end_time:
+        merged_midi_data.instruments[0].notes.append(note)
+    ##print('\n\n')
+    '''
+    for note in merged_midi_data.instruments[0].notes:
+      print(note)
+    '''
+    merged_midi_data.write(midRootpath + 'temp/merged.mid')
+    #merge to trio
+    trio_merged_midi_data = pretty_midi.PrettyMIDI(midRootpath + 'temp/merged.mid')
+    #trio_merged_midi_data.instruments.append(midRootpath + 'temp/merged.mid')
+    trio_merged_midi_data.instruments.append(pretty_midi.PrettyMIDI(midRootpath + 'temp/_1.mid').instruments[0])
+    trio_merged_midi_data.instruments.append(pretty_midi.PrettyMIDI(midRootpath + 'temp/_2.mid').instruments[0])
+    trio_merged_midi_data.write(midRootpath + 'temp/trio_merged.mid')
+    return mm.midi_to_sequence_proto(pretty_midi.PrettyMIDI(midRootpath + 'temp/merged.mid'))
+  
+  def _playMusic(id_list):
+      audio_file = '/Users/inhyukyee/repo/merged.mp3'
+      p = vlc.MediaPlayer(audio_file)
+      p.play()
+    
   def _generate(self, input_sequence, zero_time, response_start_time,
                 response_end_time):
     """Generates a response sequence with the currently-selected generator.
@@ -311,6 +366,11 @@ class CallAndResponseMidiInteraction(MidiInteraction):
     Returns:
       The generated NoteSequence.
     """
+    print('zero_time:' + str(zero_time))
+    print('response_start_time:' + str(response_start_time))
+    print('response_end_time:' + str(response_end_time))
+    time_adjusted_input_sequence = adjust_sequence_times(input_sequence, -zero_time)
+    MidiInteraction.count = MidiInteraction.count + 1
     # Generation is simplified if we always start at 0 time.
     response_start_time -= zero_time
     response_end_time -= zero_time
@@ -325,22 +385,72 @@ class CallAndResponseMidiInteraction(MidiInteraction):
 
     # Get current temperature setting.
     generator_options.args['temperature'].float_value = self._temperature
+    if self._sequence_generator == None:
+      midRootpath = '/Users/inhyukyee/repo/pregenerated/mid/'
+      wavFilepath = '/Users/inhyukyee/repo/pregenerated/wav/trio_merged.wav'
+      targetNum = random.randint(1,1000)
+      midFilepath = os.path.join(midRootpath, str(targetNum) + '.mid')
+      print(midFilepath)
+      #wavFilepath = os.path.join(wavRootpath, targetNum + '.wav')
 
-    # Generate response.
-    tf.logging.info(
+      #command = 'sleep 1 && afplay ' + audio_file
+      #proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+      response_sequence = self._getPianoTrackFromTrio(time_adjusted_input_sequence, midFilepath, midRootpath)
+      
+      diff = 0
+      for i in range(0, len(response_sequence.notes)):
+        if response_sequence.notes[i].start_time < response_start_time and i == 0:
+          diff = response_start_time - response_sequence.notes[i].start_time
+        if diff == 0:
+          break
+        response_sequence.notes[i].start_time = response_sequence.notes[i].start_time + diff
+        response_sequence.notes[i].end_time = response_sequence.notes[i].end_time + diff
+
+      f_response_sequence = adjust_sequence_times(response_sequence, zero_time)
+
+      
+      for note in f_response_sequence.notes:
+        print(note)
+      '''
+      print('##############################f_response_sequence##############################')
+      print(f_response_sequence)
+      print('##############################f_response_sequence##############################')
+      '''
+      midi_data = pretty_midi.PrettyMIDI(midRootpath + 'temp/trio_merged.mid')
+      note_sequence = mm.midi_to_sequence_proto(midi_data)
+      mm.play_sequence(note_sequence, synth=mm.fluidsynth, wavpath=wavFilepath)
+      #proc = subprocess.Popen(['afplay', wavFilepath])
+      command = 'sleep 1 && afplay ' + wavFilepath
+      proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+      return f_response_sequence
+    else:
+      # Generate response.
+      tf.logging.info(
         "Generating sequence using '%s' generator.",
         self._sequence_generator.details.id)
-    tf.logging.debug('Generator Details: %s',
-                     self._sequence_generator.details)
-    tf.logging.debug('Bundle Details: %s',
-                     self._sequence_generator.bundle_details)
-    tf.logging.debug('Generator Options: %s', generator_options)
-    response_sequence = self._sequence_generator.generate(
+      tf.logging.debug('Generator Details: %s',
+                       self._sequence_generator.details)
+      tf.logging.debug('Bundle Details: %s',
+                       self._sequence_generator.bundle_details)
+      tf.logging.debug('Generator Options: %s', generator_options)
+      response_sequence = self._sequence_generator.generate(
         adjust_sequence_times(input_sequence, -zero_time), generator_options)
-    response_sequence = magenta.music.trim_note_sequence(
+      response_sequence = magenta.music.trim_note_sequence(
         response_sequence, response_start_time, response_end_time)
-    return adjust_sequence_times(response_sequence, zero_time)
+      final_response_sequence = adjust_sequence_times(response_sequence, zero_time)
+      '''
+      print('##############################final_response_sequence##############################')
+      print('response_start_time:' + str(response_start_time))
+      print('response_end_time:' + str(response_end_time))
+      print('zero_time:' + str(zero_time))
+      print(final_response_sequence)
+      print('##############################final_response_sequence##############################')
+      '''
+      return final_response_sequence
+    #return adjust_sequence_times(response_sequence, zero_time)
 
+    
   def run(self):
     """The main loop for a real-time call and response interaction."""
     start_time = time.time()
@@ -435,13 +545,17 @@ class CallAndResponseMidiInteraction(MidiInteraction):
           # Compute duration of response.
           num_ticks = self._midi_hub.control_value(
               self._response_ticks_control_number)
-
+          
           if num_ticks:
             response_duration = num_ticks * tick_duration
           else:
             # Use capture duration.
             response_duration = tick_time - capture_start_time
-
+            
+          #added
+          if self._sequence_generator == None: #Trio
+            response_duration = 32.0
+          ###########
           response_start_time = tick_time
           response_sequence = self._generate(
               captured_sequence,
