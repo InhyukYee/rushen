@@ -4,9 +4,11 @@ import abc
 import threading
 import time
 import pretty_midi
+import signal
 import subprocess
 import random
 import os
+import time
 import numpy as np
 # internal imports
 import tensorflow as tf
@@ -33,7 +35,13 @@ def adjust_sequence_times(sequence, delta_time):
   retimed_sequence.total_time += delta_time
   return retimed_sequence
 
-
+class ProcElement():
+    def __init__(self, proc, timestamp):
+      self._proc = proc
+      self._timestamp = timestamp
+      
+      
+  
 class MidiInteraction(threading.Thread):
   """Base class for handling interaction between MIDI and SequenceGenerator.
 
@@ -89,6 +97,40 @@ class MidiInteraction(threading.Thread):
     self._stop_signal = threading.Event()
     super(MidiInteraction, self).__init__()
 
+    self._procsQ = []
+
+  def _onSubProcessExit(pid):
+    print('_onSubProcessExit')
+    for i in range(0, len(self._procsQ)):
+      proc = self._procsQ[i]
+      if proc.pid is pid:
+        print('HIT!')
+        del self._procsQ[i]
+        break
+      
+  def _popenAndCall(onExit, *popenArgs, **popenKWArgs):
+    """
+    Runs the given args in a subprocess.Popen, and then calls the function
+    onExit when the subprocess completes.
+    onExit is a callable object, and popenArgs is a list/tuple of args that 
+    would give to subprocess.Popen.
+    """
+    def runInThread(onExit, *popenArgs, **popenKWArgs):
+      print('{} {}'.format(popenArgs, popenKWArgs))
+      for arg in popenArgs:
+        print ('*argv :', arg)
+      for key,value in popenKWArgs.iteritems():
+        print ('popenKWArgs %s = %s' %(key, value))
+      proc = subprocess.Popen(*popenArgs, **popenKWArgs)
+      proc.wait()
+      onExit(proc.pid)
+      return
+      
+    thread = threading.Thread(target=runInThread, args=(onExit, popenArgs, popenKWArgs))
+    thread.start()
+    # returns immediately after the thread starts
+    return thread
+  
   @property
   def _sequence_generator(self):
     """Returns the SequenceGenerator selected by the current control value."""
@@ -97,6 +139,7 @@ class MidiInteraction(threading.Thread):
     val = self._midi_hub.control_value(self._generator_select_control_number)
     val = 0 if val is None else val
     if val >= len(self._sequence_generators):
+      print('val:' + str(val) + ', len(self._sequence_generators):' + str(len(self._sequence_generators)))
       return None
     return self._sequence_generators[val % len(self._sequence_generators)]
 
@@ -238,6 +281,7 @@ class CallAndResponseMidiInteraction(MidiInteraction):
                tempo_control_number=None,
                temperature_control_number=None,
                loop_control_number=None,
+               short_control_number=None,
                state_control_number=None):
     super(CallAndResponseMidiInteraction, self).__init__(
         midi_hub, sequence_generators, qpm, generator_select_control_number,
@@ -256,6 +300,7 @@ class CallAndResponseMidiInteraction(MidiInteraction):
     self._max_listen_ticks_control_number = max_listen_ticks_control_number
     self._response_ticks_control_number = response_ticks_control_number
     self._loop_control_number = loop_control_number
+    self._short_control_number = short_control_number
     self._state_control_number = state_control_number
     # Event for signalling when to end a call.
     self._end_call = threading.Event()
@@ -303,6 +348,12 @@ class CallAndResponseMidiInteraction(MidiInteraction):
   def _should_loop(self):
     return (self._loop_control_number and
             self._midi_hub.control_value(self._loop_control_number) == 127)
+  
+  @property
+  def _should_short(self):
+    return (self._short_control_number and
+            self._midi_hub.control_value(self._short_control_number) == 127)
+
   
   def _getPianoTrackFromTrio(self, input_sequence, midFilepath, midRootpath):
     print('midFilepath:' + midFilepath)
@@ -386,8 +437,19 @@ class CallAndResponseMidiInteraction(MidiInteraction):
     # Get current temperature setting.
     generator_options.args['temperature'].float_value = self._temperature
     if self._sequence_generator == None:
-      midRootpath = '/Users/inhyukyee/repo/pregenerated/mid/'
-      wavFilepath = '/Users/inhyukyee/repo/pregenerated/wav/trio_merged.wav'
+      Rootpath = '/Users/inhyukyee/repo/pregenerated/'
+      midRootpath = ''
+      wavFilepath = ''
+
+      if self._should_short:
+        print('SHORT 8s')
+        midRootpath = '/Users/inhyukyee/repo/pregenerated/8s/mid/'
+        wavFilepath = '/Users/inhyukyee/repo/pregenerated/8s/wav/trio_merged.wav'
+      else:
+        print('LONG 32s')
+        midRootpath = '/Users/inhyukyee/repo/pregenerated/32s/mid/'
+        wavFilepath = '/Users/inhyukyee/repo/pregenerated/32s/wav/trio_merged.wav'
+        
       targetNum = random.randint(1,1000)
       midFilepath = os.path.join(midRootpath, str(targetNum) + '.mid')
       print(midFilepath)
@@ -409,20 +471,19 @@ class CallAndResponseMidiInteraction(MidiInteraction):
 
       f_response_sequence = adjust_sequence_times(response_sequence, zero_time)
 
-      
+      '''
       for note in f_response_sequence.notes:
         print(note)
-      '''
-      print('##############################f_response_sequence##############################')
-      print(f_response_sequence)
-      print('##############################f_response_sequence##############################')
       '''
       midi_data = pretty_midi.PrettyMIDI(midRootpath + 'temp/trio_merged.mid')
       note_sequence = mm.midi_to_sequence_proto(midi_data)
       mm.play_sequence(note_sequence, synth=mm.fluidsynth, wavpath=wavFilepath)
       #proc = subprocess.Popen(['afplay', wavFilepath])
       command = 'sleep 1 && afplay ' + wavFilepath
-      proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+      proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=os.setsid)
+      #proc = self._popenAndCall(self._onSubProcessExit, command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=os.setsid)
+      pe = ProcElement(proc, time.time())
+      self._procsQ.append(pe)
       return f_response_sequence
     else:
       # Generate response.
@@ -490,6 +551,13 @@ class CallAndResponseMidiInteraction(MidiInteraction):
       if self._stop_signal.is_set():
         break
       if self._panic.is_set():
+        print('!PANIC!')
+        for elem in self._procsQ:
+          if (elem._proc.poll()) is None and (time.time() - elem._timestamp < 32):
+            print('!PA PA!')
+            os.killpg(os.getpgid(elem._proc.pid), signal.SIGTERM)
+        del self._procsQ[:]
+
         response_sequence = music_pb2.NoteSequence()
         player.update_sequence(response_sequence)
         self._panic.clear()

@@ -131,6 +131,11 @@ tf.app.flags.DEFINE_integer(
     None,
     'The control number to use for determining whether to loop the response. '
     'A value of 127 turns looping on and any other value turns it off.')
+tf.app.flags.DEFINE_integer(
+    'short_control_number',
+    None,
+    'The control number to use for determining whether to play short sequence for Trio. '
+    'A value of 127 turns looping on and any other value turns it off.')
 tf.app.flags.DEFINE_string(
     'bundle_files',
     None,
@@ -178,6 +183,7 @@ _CONTROL_FLAGS = [
     'temperature_control_number',
     'tempo_control_number',
     'loop_control_number',
+    'short_control_number',
     'generator_select_control_number',
     'state_control_number']
 
@@ -378,6 +384,7 @@ def main(unused_argv):
       tempo_control_number=control_map['tempo'],
       temperature_control_number=control_map['temperature'],
       loop_control_number=control_map['loop'],
+    short_control_number=control_map['short'],
       state_control_number=control_map['state'])
 
   _print_instructions()
