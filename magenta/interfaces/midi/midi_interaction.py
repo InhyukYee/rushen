@@ -53,7 +53,8 @@ class MidiInteraction(threading.Thread):
 
   Args:
     midi_hub: The MidiHub to use for MIDI I/O.
-    sequence_generators: A collection of SequenceGenerator objects.
+    seque
+nce_generators: A collection of SequenceGenerator objects.
     qpm: The quarters per minute to use for this interaction. May be overriden
        by control changes sent to `tempo_control_number`.
     generator_select_control_number: An optional MIDI control number whose
@@ -138,9 +139,17 @@ class MidiInteraction(threading.Thread):
       return self._sequence_generators[0]
     val = self._midi_hub.control_value(self._generator_select_control_number)
     val = 0 if val is None else val
+    
+    if val == 3:
+      return 'Trio'
+    elif val == 4:
+      return 'Multitracks'
+    
+    '''
     if val >= len(self._sequence_generators):
       print('val:' + str(val) + ', len(self._sequence_generators):' + str(len(self._sequence_generators)))
       return None
+    '''
     return self._sequence_generators[val % len(self._sequence_generators)]
 
   @property
@@ -364,8 +373,8 @@ class CallAndResponseMidiInteraction(MidiInteraction):
     #save input_sequence to midi file
     mm.sequence_proto_to_midi_file(input_sequence, midRootpath + '/temp/input_sequence.mid')
     front_midi_data = pretty_midi.PrettyMIDI(midRootpath + 'temp/input_sequence.mid')
-    orig_midi_data = pretty_midi.PrettyMIDI(midRootpath + 'temp/_0.mid')
-    merged_midi_data = pretty_midi.PrettyMIDI(midRootpath + 'temp/_0.mid')
+    orig_midi_data = pretty_midi.PrettyMIDI(midRootpath + 'temp/0_.mid')
+    merged_midi_data = pretty_midi.PrettyMIDI(midRootpath + 'temp/0_.mid')
     del merged_midi_data.instruments[0].notes[:]
     
     #front_midi_data_start_time = None
@@ -393,8 +402,8 @@ class CallAndResponseMidiInteraction(MidiInteraction):
     #merge to trio
     trio_merged_midi_data = pretty_midi.PrettyMIDI(midRootpath + 'temp/merged.mid')
     #trio_merged_midi_data.instruments.append(midRootpath + 'temp/merged.mid')
-    trio_merged_midi_data.instruments.append(pretty_midi.PrettyMIDI(midRootpath + 'temp/_1.mid').instruments[0])
-    trio_merged_midi_data.instruments.append(pretty_midi.PrettyMIDI(midRootpath + 'temp/_2.mid').instruments[0])
+    trio_merged_midi_data.instruments.append(pretty_midi.PrettyMIDI(midRootpath + 'temp/1_.mid').instruments[0])
+    trio_merged_midi_data.instruments.append(pretty_midi.PrettyMIDI(midRootpath + 'temp/2_.mid').instruments[0])
     trio_merged_midi_data.write(midRootpath + 'temp/trio_merged.mid')
     return mm.midi_to_sequence_proto(pretty_midi.PrettyMIDI(midRootpath + 'temp/merged.mid'))
   
@@ -436,21 +445,25 @@ class CallAndResponseMidiInteraction(MidiInteraction):
 
     # Get current temperature setting.
     generator_options.args['temperature'].float_value = self._temperature
-    if self._sequence_generator == None:
+    print('####################self._sequence_generator:' + self._sequence_generator + '####################')
+    
+    if self._sequence_generator == 'Trio':
       Rootpath = '/Users/inhyukyee/repo/pregenerated/'
       midRootpath = ''
       wavFilepath = ''
-
+      num_mid_file = 0
       if self._should_short:
         print('SHORT 8s')
         midRootpath = '/Users/inhyukyee/repo/pregenerated/8s/mid/'
         wavFilepath = '/Users/inhyukyee/repo/pregenerated/8s/wav/trio_merged.wav'
+        num_mid_file = 4392
       else:
         print('LONG 32s')
         midRootpath = '/Users/inhyukyee/repo/pregenerated/32s/mid/'
         wavFilepath = '/Users/inhyukyee/repo/pregenerated/32s/wav/trio_merged.wav'
+        num_mid_file = 10000
         
-      targetNum = random.randint(1,1000)
+      targetNum = random.randint(1,num_mid_file)
       midFilepath = os.path.join(midRootpath, str(targetNum) + '.mid')
       print(midFilepath)
       #wavFilepath = os.path.join(wavRootpath, targetNum + '.wav')
@@ -485,6 +498,43 @@ class CallAndResponseMidiInteraction(MidiInteraction):
       pe = ProcElement(proc, time.time())
       self._procsQ.append(pe)
       return f_response_sequence
+    
+    elif self._sequence_generator == 'Multitracks':
+      print('Multitracks!')
+      
+      #just get any melody track from Trio
+      midRootpath = '/Users/inhyukyee/repo/pregenerated/32s/mid/'
+      num_mid_file = 1458
+
+      targetNum = random.randint(1,num_mid_file)
+      midFilepath = os.path.join(midRootpath, str(targetNum) + '.mid')
+      print(midFilepath)
+
+      response_sequence = self._getPianoTrackFromTrio(time_adjusted_input_sequence, midFilepath, midRootpath)
+      
+      f_response_sequence = adjust_sequence_times(response_sequence, zero_time)
+      #END:just get any melody track from Trio
+      
+
+      wavRootpath = '/Users/inhyukyee/repo/pregenerated/32s/multitracks_wav/'
+      wavFilepath = wavRootpath + str(random.randint(0, num_mid_file)) + '.wav'
+      print('wavFilepath:' + wavFilepath)
+      #wavFilepath = os.path.join(wavRootpath, str(random.randint(0, num_mid_file)), '.wav')
+      #wavFilepath = os.path.join(wavRootpath, '99.wav')
+      '''
+      midi_data = pretty_midi.PrettyMIDI(
+        '/Users/inhyukyee/repo/pregenerated/32s/4tracks_mid/' + str(targetNum) + '.mid')
+      note_sequence = mm.midi_to_sequence_proto(midi_data)
+      mm.play_sequence(note_sequence, synth=mm.fluidsynth,
+                       sf2_path='/Users/inhyukyee/Downloads/SGM-v2.01-Sal-Guit-Bass-V1.3.sf2', wavpath=wavFilepath)
+      '''
+      command = 'sleep 1 && afplay ' + wavFilepath
+      proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=os.setsid)
+      #proc = self._popenAndCall(self._onSubProcessExit, command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=os.setsid)
+      pe = ProcElement(proc, time.time())
+      self._procsQ.append(pe)
+      return f_response_sequence
+      
     else:
       # Generate response.
       tf.logging.info(
@@ -621,7 +671,7 @@ class CallAndResponseMidiInteraction(MidiInteraction):
             response_duration = tick_time - capture_start_time
             
           #added
-          if self._sequence_generator == None: #Trio
+          if self._sequence_generator == 'Trio': #Trio
             response_duration = 32.0
           ###########
           response_start_time = tick_time
