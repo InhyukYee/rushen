@@ -445,7 +445,7 @@ class CallAndResponseMidiInteraction(MidiInteraction):
 
     # Get current temperature setting.
     generator_options.args['temperature'].float_value = self._temperature
-    print('####################self._sequence_generator:' + self._sequence_generator + '####################')
+    print('####################self._sequence_generator:' + str(self._sequence_generator) + '####################')
     
     if self._sequence_generator == 'Trio':
       Rootpath = '/Users/inhyukyee/repo/pregenerated/'
